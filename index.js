@@ -43,7 +43,7 @@ async function run() {
     const petCollection = database.collection("pets");
     const userCollection = database.collection("users");
     const adoptReqCollection = database.collection("adoptRequest");
-    const donationCollection = database.collection("donations");
+    // const donationCollection = database.collection("donations");
     const donationCampaignsCollection =
       database.collection("donationCampaigns");
 
@@ -148,6 +148,26 @@ async function run() {
       res.send(result);
     });
 
+    app.put(`/accept-adopt-req/:id`, async (req, res) => {
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) };
+
+      const updatedDocs = {
+        $set: {
+          accept: true,
+        },
+      };
+      const result = await adoptReqCollection.updateOne(filter, updatedDocs);
+      res.send(result);
+    });
+
+    app.delete("/adopt-request/:id", async (req, res) => {
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) };
+      const result = await adoptReqCollection.deleteOne(filter);
+      res.send(result);
+    });
+
     // update pet by user
     // app.put("/updatePet", async (req, res) => {});
 
@@ -158,8 +178,69 @@ async function run() {
     });
 
     // get all users by admin
-    app.get("/users", verifyToken, async (req, res) => {
+    app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
       const result = await userCollection.find().toArray();
+      res.send(result);
+    });
+
+    // get all donation by admin
+    app.get(
+      "/get-all-donation-by-admin",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const result = await donationCampaignsCollection.find().toArray();
+        res.send(result);
+      }
+    );
+    // get signle donation by admin
+    app.get("/get-signle-donation-by-admin/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await donationCampaignsCollection.findOne(query);
+      res.send(result);
+    });
+
+    // update donation data by admin
+    app.put("/update-donation/:id", async (req, res) => {
+      const id = req.params.id;
+      const {
+        getDonationAmount,
+        lastDate,
+        longDescription,
+        maxDonationAmount,
+        name,
+        image,
+        shortDescription,
+      } = req.body;
+
+      const filter = { _id: new ObjectId(id) };
+
+      const updatedDocs = {
+        $set: {
+          getDonationAmount,
+          lastDate,
+          longDescription,
+          maxDonationAmount,
+          name,
+          image,
+          shortDescription,
+        },
+      };
+
+      const result = await donationCampaignsCollection.updateOne(
+        filter,
+        updatedDocs
+      );
+      console.log(result);
+      res.send(result);
+    });
+
+    // delete donation by admin
+    app.delete("/delete-donation/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await donationCampaignsCollection.deleteOne(query);
       res.send(result);
     });
 
@@ -274,12 +355,44 @@ async function run() {
       res.send(result);
     });
 
+    app.patch(
+      "/mark-not-adopt/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        console.log({ id });
+        const filter = { _id: new ObjectId(id) };
+        const markAdopt = {
+          $set: {
+            adopted: false,
+          },
+        };
+        const result = await petCollection.updateOne(filter, markAdopt);
+        res.send(result);
+      }
+    );
+
     // delete user added pets
     app.delete("/pets/:id", async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const deletedPet = await petCollection.deleteOne(query);
       res.send(deletedPet);
+    });
+
+    // get all donation for home page
+    app.get("/donations", async (req, res) => {
+      const result = await donationCampaignsCollection.find().toArray();
+      res.send(result);
+    });
+
+    // get single donation for home page details
+    app.get("/donations/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await donationCampaignsCollection.findOne(query);
+      res.send(result);
     });
 
     // get my donation (campaign)
@@ -303,7 +416,8 @@ async function run() {
         name,
         image,
         maxDonationAmount,
-        lastDate: new Date(lastDate),
+        getDonationAmount: 0,
+        lastDate,
         shortDescription,
         longDescription,
         createdAt: new Date(),
