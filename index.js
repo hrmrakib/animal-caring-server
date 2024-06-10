@@ -46,6 +46,7 @@ async function run() {
     // const donationCollection = database.collection("donations");
     const donationCampaignsCollection =
       database.collection("donationCampaigns");
+    const paymentCollection = database.collection("payments");
 
     // jwt
     app.post("/jwt", async (req, res) => {
@@ -138,7 +139,7 @@ async function run() {
       // chacking is exist!
       const query = { adoptId: petAdpot.adoptId };
       const isExist = await adoptReqCollection.findOne(query);
-      console.log({ isExist, query });
+      // console.log({ isExist, query });
 
       if (isExist) {
         return res.send({ isExist: true });
@@ -232,7 +233,6 @@ async function run() {
         filter,
         updatedDocs
       );
-      console.log(result);
       res.send(result);
     });
 
@@ -242,6 +242,39 @@ async function run() {
       const query = { _id: new ObjectId(id) };
       const result = await donationCampaignsCollection.deleteOne(query);
       res.send(result);
+    });
+
+    // pause - donation campaign
+    app.put("/donation-status/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+
+      const campaignItem = await donationCampaignsCollection.findOne(query);
+      const isPause = campaignItem?.pause;
+      console.log({ isPause });
+      if (isPause) {
+        const update = {
+          $set: {
+            pause: false,
+          },
+        };
+        const result = await donationCampaignsCollection.updateOne(
+          query,
+          update
+        );
+        res.send(result);
+      } else {
+        const update = {
+          $set: {
+            pause: true,
+          },
+        };
+        const result = await donationCampaignsCollection.updateOne(
+          query,
+          update
+        );
+        res.send(result);
+      }
     });
 
     // create a user
@@ -396,7 +429,7 @@ async function run() {
     });
 
     // get my donation (campaign)
-    app.get("/my-donation-campaign", async (req, res) => {
+    app.get("/my-donation-campaign/:email", async (req, res) => {
       const result = await donationCampaignsCollection.find().toArray();
       res.send(result);
     });
@@ -427,6 +460,46 @@ async function run() {
 
       const result = await donationCampaignsCollection.insertOne(newCampaign);
       res.send(result);
+    });
+
+    // payment intent
+    app.post("/create-payment-intent", async (req, res) => {
+      const { price } = req.body;
+      const amount = parseInt(price * 100);
+
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount,
+        currency: "usd",
+        payment_method_types: ["card"],
+      });
+
+      res.send({ clientSecret: paymentIntent.client_secret });
+    });
+
+    app.get("/payments/:email", verifyToken, async (req, res) => {
+      const query = { email: req.params.email };
+      if (req.params.email !== req.decoded.email) {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+      const result = await paymentCollection.find(query).toArray();
+      res.send(result);
+    });
+
+    app.post("/payments", async (req, res) => {
+      const payment = req.body;
+      const paymentResult = await paymentCollection.insertOne(payment);
+
+      // carefully delete each item from the cart
+      console.log({ payment });
+      const query = {
+        _id: {
+          $in: payment.cartIds.map((id) => new ObjectId(id)),
+        },
+      };
+
+      // const deleteResult = await cartCollection.deleteMany(query);
+
+      res.send({ paymentResult, deleteResult });
     });
 
     console.log(
