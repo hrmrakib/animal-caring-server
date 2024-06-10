@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const jwt = require("jsonwebtoken");
 const app = express();
 require("dotenv").config();
 const port = process.env.PORT || 8000;
@@ -8,7 +9,11 @@ const port = process.env.PORT || 8000;
 app.use(express.json());
 app.use(
   cors({
-    origin: ["http://localhost:5173", "http://localhost:5174"],
+    origin: [
+      "http://localhost:5173",
+      "https://animal-carings.web.app",
+      "https://animal-carings.firebaseapp.com",
+    ],
     credentials: true,
     optionsSuccessStatus: 200,
   })
@@ -29,19 +34,84 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
+    // await client.connect();
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
+    // await client.db("admin").command({ ping: 1 });
 
     // all database collection
     const database = client.db("petAdoption");
     const petCollection = database.collection("pets");
     const userCollection = database.collection("users");
     const adoptReqCollection = database.collection("adoptRequest");
+    const donationCollection = database.collection("donations");
+    const donationCampaignsCollection =
+      database.collection("donationCampaigns");
+
+    // jwt
+    app.post("/jwt", async (req, res) => {
+      const userEmail = req.body;
+      const token = jwt.sign(userEmail, process.env.ACCESS_TOKEN_SECRET, {
+        expiresIn: "365d",
+      });
+      res.send({ token });
+    });
+
+    // middlewares
+    const verifyToken = (req, res, next) => {
+      if (!req.headers.authorization) {
+        return res.status(401).send({ message: "access forbidden!" });
+      }
+      const token = req.headers.authorization.split(" ")[1];
+
+      jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+        if (err) {
+          return res.status(401).send({ message: "forbidden access" });
+        }
+
+        req.decoded = decoded;
+        // console.log(decoded);
+        next();
+      });
+    };
+
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.decoded?.email;
+      const query = { email: email };
+      const user = await userCollection.findOne(query);
+      const isAdmin = user?.role === "admin";
+
+      if (!isAdmin) {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+      next();
+    };
+
+    app.get("/", (req, res) => {
+      res.send("I am always running on!");
+    });
+
+    // isAdmin - check
+    app.get("/user/admin/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+      if (email !== req.decoded.email) {
+        return res.status(403).send({ message: "unauthorized access" });
+      }
+
+      const query = { email: email };
+      const user = await userCollection.findOne(query);
+
+      let admin = false;
+      if (user) {
+        admin = user?.role === "admin";
+      }
+
+      res.send({ admin });
+    });
 
     // get all pet data
     app.get("/pets", async (req, res) => {
-      const result = await petCollection.find({ adopted: false }).toArray();
+      const query = { adopted: false };
+      const result = await petCollection.find(query).toArray();
       res.send(result);
     });
 
@@ -79,7 +149,7 @@ async function run() {
     });
 
     // update pet by user
-    app.put("/updatePet", async (req, res) => {});
+    // app.put("/updatePet", async (req, res) => {});
 
     // get all pets by admin
     app.get("/petsByAdmin", async (req, res) => {
@@ -88,7 +158,7 @@ async function run() {
     });
 
     // get all users by admin
-    app.get("/users", async (req, res) => {
+    app.get("/users", verifyToken, async (req, res) => {
       const result = await userCollection.find().toArray();
       res.send(result);
     });
@@ -109,28 +179,140 @@ async function run() {
       res.send(result);
     });
 
+    app.patch("/make-admin/:id", async (req, res) => {
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) };
+      const makeAdmin = {
+        $set: {
+          role: "admin",
+        },
+      };
+      const result = await userCollection.updateOne(filter, makeAdmin);
+      res.send(result);
+    });
+
     // get pets data by user email (my added pets)
 
     // TODO: update by email params
     // app.get("/my-added-pets/:email", async (req, res) => {
-    app.get("/my-added-pets", async (req, res) => {
-      const query = req.params.email;
-      const result = await petCollection.find().toArray();
+    app.get("/my-added-pets/:email", async (req, res) => {
+      const email = req.params.email;
+      const query = { userEmail: email };
+      const result = await petCollection.find(query).toArray();
       res.send(result);
     });
 
     // add user pets
     app.post("/pets", async (req, res) => {
-      const pet = req.body;
-      const result = await petCollection.insertOne(pet);
+      const {
+        name,
+        age,
+        userEmail,
+        category,
+        location,
+        shortDescription,
+        longDescription,
+        image,
+      } = req.body;
+
+      const newPet = {
+        name,
+        age,
+        userEmail,
+        category,
+        location,
+        shortDescription,
+        longDescription,
+        adopted: false,
+        image,
+        createdAt: new Date(),
+      };
+
+      const result = await petCollection.insertOne(newPet);
+      res.send(result);
+    });
+
+    app.put("/pets/:id", async (req, res) => {
+      const id = req.params.id;
+      const {
+        name,
+        age,
+        image,
+        category,
+        location,
+        shortDescription,
+        longDescription,
+      } = req.body;
+
+      const filter = { _id: new ObjectId(id) };
+      const updatedDocs = {
+        $set: {
+          name,
+          age,
+          image,
+          category,
+          location,
+          shortDescription,
+          longDescription,
+        },
+      };
+
+      const result = await petCollection.updateOne(filter, updatedDocs);
+      res.send(result);
+    });
+
+    app.patch("/mark-adopt/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
+      console.log({ id });
+      const filter = { _id: new ObjectId(id) };
+      const markAdpot = {
+        $set: {
+          adopted: true,
+        },
+      };
+      const result = await petCollection.updateOne(filter, markAdpot);
       res.send(result);
     });
 
     // delete user added pets
     app.delete("/pets/:id", async (req, res) => {
       const id = req.params.id;
-      const deletedPet = await petCollection.deleteOne(id);
+      const query = { _id: new ObjectId(id) };
+      const deletedPet = await petCollection.deleteOne(query);
       res.send(deletedPet);
+    });
+
+    // get my donation (campaign)
+    app.get("/my-donation-campaign", async (req, res) => {
+      const result = await donationCampaignsCollection.find().toArray();
+      res.send(result);
+    });
+
+    // create donation campaign
+    app.post("/create-donation-campaign", async (req, res) => {
+      const {
+        name,
+        image,
+        lastDate,
+        maxDonationAmount,
+        shortDescription,
+        longDescription,
+      } = req.body;
+
+      const newCampaign = {
+        name,
+        image,
+        maxDonationAmount,
+        lastDate: new Date(lastDate),
+        shortDescription,
+        longDescription,
+        createdAt: new Date(),
+        pause: false,
+        isClose: false,
+      };
+
+      const result = await donationCampaignsCollection.insertOne(newCampaign);
+      res.send(result);
     });
 
     console.log(
