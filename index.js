@@ -3,6 +3,7 @@ const cors = require("cors");
 const jwt = require("jsonwebtoken");
 const app = express();
 require("dotenv").config();
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const port = process.env.PORT || 8000;
 
 // middleware
@@ -43,10 +44,10 @@ async function run() {
     const petCollection = database.collection("pets");
     const userCollection = database.collection("users");
     const adoptReqCollection = database.collection("adoptRequest");
-    // const donationCollection = database.collection("donations");
+    const donationCollection = database.collection("donations");
     const donationCampaignsCollection =
       database.collection("donationCampaigns");
-    const paymentCollection = database.collection("payments");
+    // const paymentCollection = database.collection("payments");
 
     // jwt
     app.post("/jwt", async (req, res) => {
@@ -66,7 +67,7 @@ async function run() {
 
       jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
         if (err) {
-          return res.status(401).send({ message: "forbidden access" });
+          return res.status(403).send({ message: "forbidden access" });
         }
 
         req.decoded = decoded;
@@ -124,7 +125,7 @@ async function run() {
     });
 
     // get all adopt request
-    app.get("/adopt-request", async (req, res) => {
+    app.get("/adopt-request", verifyToken, async (req, res) => {
       const result = await adoptReqCollection.find().toArray();
       res.send(result);
     });
@@ -149,7 +150,7 @@ async function run() {
       res.send(result);
     });
 
-    app.put(`/accept-adopt-req/:id`, async (req, res) => {
+    app.put(`/accept-adopt-req/:id`, verifyToken, async (req, res) => {
       const id = req.params.id;
       const filter = { _id: new ObjectId(id) };
 
@@ -169,11 +170,14 @@ async function run() {
       res.send(result);
     });
 
+    // get single donation detail by user
+    // app.get("/get-single-donation-by-user", async (req, res) => {});
+
     // update pet by user
     // app.put("/updatePet", async (req, res) => {});
 
     // get all pets by admin
-    app.get("/petsByAdmin", async (req, res) => {
+    app.get("/petsByAdmin", verifyToken, verifyAdmin, async (req, res) => {
       const result = await petCollection.find().toArray();
       res.send(result);
     });
@@ -375,7 +379,7 @@ async function run() {
       res.send(result);
     });
 
-    app.patch("/mark-adopt/:id", verifyToken, async (req, res) => {
+    app.patch("/mark-adopt/:id", async (req, res) => {
       const id = req.params.id;
       console.log({ id });
       const filter = { _id: new ObjectId(id) };
@@ -430,14 +434,86 @@ async function run() {
 
     // get my donation (campaign)
     app.get("/my-donation-campaign/:email", async (req, res) => {
-      const result = await donationCampaignsCollection.find().toArray();
+      const userEmail = req.params.email;
+      const query = { email: userEmail };
+      const result = await donationCampaignsCollection.find(query).toArray();
+      res.send(result);
+    });
+
+    // get single for my donation campaign update
+    app.get("/my-donation-single-item/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await donationCampaignsCollection.findOne(query);
+      res.send(result);
+    });
+
+    // update my donation campaign info
+    app.put("/update-donation-campaign-info/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const {
+        name,
+        image,
+        getDonationAmount,
+        maxDonationAmount,
+        shortDescription,
+        longDescription,
+      } = req.body;
+
+      const updatedDocs = {
+        $set: {
+          name,
+          image,
+          getDonationAmount,
+          maxDonationAmount,
+          shortDescription,
+          longDescription,
+        },
+      };
+
+      const result = await donationCampaignsCollection.updateOne(
+        query,
+        updatedDocs
+      );
+      res.send(result);
+    });
+
+    app.put("/my-donation-campaign-pause/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const updatedDocs = {
+        $set: {
+          pause: true,
+        },
+      };
+      const result = await donationCampaignsCollection.updateOne(
+        query,
+        updatedDocs
+      );
+      res.send(result);
+    });
+
+    // ask for refund
+    app.put("/ask-for-refund/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+
+      const updateDocs = {
+        $set: {
+          refund: true,
+        },
+      };
+
+      const result = await donationCollection.updateOne(query, updateDocs);
       res.send(result);
     });
 
     // create donation campaign
-    app.post("/create-donation-campaign", async (req, res) => {
+    app.post("/create-donation-campaign", verifyToken, async (req, res) => {
       const {
         name,
+        email,
         image,
         lastDate,
         maxDonationAmount,
@@ -447,6 +523,7 @@ async function run() {
 
       const newCampaign = {
         name,
+        email,
         image,
         maxDonationAmount,
         getDonationAmount: 0,
@@ -464,11 +541,12 @@ async function run() {
 
     // payment intent
     app.post("/create-payment-intent", async (req, res) => {
-      const { price } = req.body;
-      const amount = parseInt(price * 100);
+      const { amount } = req.body;
+
+      const getAmount = parseInt(amount * 100);
 
       const paymentIntent = await stripe.paymentIntents.create({
-        amount,
+        amount: getAmount,
         currency: "usd",
         payment_method_types: ["card"],
       });
@@ -476,30 +554,41 @@ async function run() {
       res.send({ clientSecret: paymentIntent.client_secret });
     });
 
-    app.get("/payments/:email", verifyToken, async (req, res) => {
+    app.get("/payments/:email", async (req, res) => {
       const query = { email: req.params.email };
-      if (req.params.email !== req.decoded.email) {
-        return res.status(403).send({ message: "forbidden access" });
-      }
-      const result = await paymentCollection.find(query).toArray();
+
+      // TODO:  fix token issue
+      // if (req.params.email !== req.decoded.email) {
+      //   return res.status(403).send({ message: "forbidden access" });
+      // }
+      const result = await donationCollection.find(query).toArray();
       res.send(result);
     });
 
     app.post("/payments", async (req, res) => {
       const payment = req.body;
-      const paymentResult = await paymentCollection.insertOne(payment);
 
-      // carefully delete each item from the cart
-      console.log({ payment });
-      const query = {
-        _id: {
-          $in: payment.cartIds.map((id) => new ObjectId(id)),
+      const userDonate = parseFloat(payment?.donation);
+
+      const id = payment?.petId;
+      const query = { _id: new ObjectId(id) };
+
+      const findPetToAddMoney = await donationCampaignsCollection.findOne(
+        query
+      );
+      const prevDonation = parseFloat(findPetToAddMoney?.getDonationAmount);
+
+      const totalDonationAmount = userDonate + prevDonation;
+
+      const updateDonation = {
+        $set: {
+          getDonationAmount: totalDonationAmount,
         },
       };
+      await donationCampaignsCollection.updateOne(query, updateDonation);
 
-      // const deleteResult = await cartCollection.deleteMany(query);
-
-      res.send({ paymentResult, deleteResult });
+      const paymentResult = await donationCollection.insertOne(payment);
+      res.send(paymentResult);
     });
 
     console.log(
