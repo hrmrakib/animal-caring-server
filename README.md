@@ -9,4 +9,4 @@ Basic Features:
 - Admin and User role
 
 
-### [Go to Client Code of the Project](https://github.com/hrmrakib/animal-caring-server)
+### [Go to Client Code of the Project](https://github.com/hrmrakib/animal-caring-client)
